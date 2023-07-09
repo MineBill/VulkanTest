@@ -14,7 +14,8 @@ WINDOW_WIDTH  :: 600
 WINDOW_HEIGHT :: 400
 WINDOW_TITLE  :: "Vulkan"
 
-REQUIRED_VULKAN_LAYERS :: []cstring{"VK_LAYER_KHRONOS_validation"}
+REQUIRED_VULKAN_LAYERS     :: []cstring{"VK_LAYER_KHRONOS_validation"}
+REQUIRED_DEVICE_EXTENSIONS :: []cstring {vk.KHR_SWAPCHAIN_EXTENSION_NAME}
 
 Debug_Context :: struct {
     logger: log.Logger,
@@ -94,23 +95,23 @@ initialize_vulkan :: proc(dbg: ^Debug_Context) -> (instance: vk.Instance) {
     }
 
     info := vk.ApplicationInfo {
-        sType = vk.StructureType.APPLICATION_INFO,
-        pApplicationName = "Hello Triangle",
+        sType              = vk.StructureType.APPLICATION_INFO,
+        pApplicationName   = "Hello Triangle",
         applicationVersion = vk.MAKE_VERSION(1, 0, 0),
-        pEngineName = "No Engine",
-        engineVersion = vk.MAKE_VERSION(1, 0, 0),
-        apiVersion = vk.API_VERSION_1_3,
+        pEngineName        = "No Engine",
+        engineVersion      = vk.MAKE_VERSION(1, 0, 0),
+        apiVersion         = vk.API_VERSION_1_3,
     }
 
     extensions := get_required_extensions()
     defer delete(extensions)
 
     instance_info := vk.InstanceCreateInfo {
-        sType = vk.StructureType.INSTANCE_CREATE_INFO,
-        pApplicationInfo = &info,
-        enabledExtensionCount = cast(u32)len(extensions),
+        sType                   = vk.StructureType.INSTANCE_CREATE_INFO,
+        pApplicationInfo        = &info,
+        enabledExtensionCount   = cast(u32)len(extensions),
         ppEnabledExtensionNames = raw_data(extensions),
-        enabledLayerCount = 0,
+        enabledLayerCount       = 0,
     }
 
     when VALIDATION {
@@ -142,7 +143,7 @@ check_validation_layers :: proc() -> bool {
 
     req: for required_layer in REQUIRED_VULKAN_LAYERS {
         found := false
-        for property in &properties {
+        for &property in properties {
             if required_layer == cstring(raw_data(&property.layerName)) {
                 found = true
             }
@@ -174,11 +175,11 @@ get_required_extensions :: proc() -> []cstring {
 
 create_debug_info_struct :: proc(dbg: ^Debug_Context) -> vk.DebugUtilsMessengerCreateInfoEXT {
     return vk.DebugUtilsMessengerCreateInfoEXT {
-        sType = vk.StructureType.DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+        sType           = vk.StructureType.DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
         messageSeverity = {.ERROR, .VERBOSE, .WARNING},
-        messageType = {.DEVICE_ADDRESS_BINDING, .GENERAL, .PERFORMANCE, .VALIDATION},
+        messageType     = {.DEVICE_ADDRESS_BINDING, .GENERAL, .PERFORMANCE, .VALIDATION},
         pfnUserCallback = debug_callback,
-        pUserData = dbg,
+        pUserData       = dbg,
     }
 }
 
@@ -245,7 +246,7 @@ pick_physical_device :: proc(app: ^Application) -> (device: vk.PhysicalDevice) {
 
 is_device_suitable :: proc(device: vk.PhysicalDevice, surface: vk.SurfaceKHR)  -> bool {
     indices := get_queue_families(device, surface)
-    return is_queue_family_complete(indices)
+    return is_queue_family_complete(indices) && check_device_extension_support(device)
 }
 
 QueueFamilyIndices :: struct {
@@ -271,7 +272,7 @@ get_queue_families :: proc(device: vk.PhysicalDevice, surface: vk.SurfaceKHR) ->
     defer delete(properties)
 
     vk.GetPhysicalDeviceQueueFamilyProperties(device, &count, raw_data(properties))
-    
+
     for property, i in properties {
         if vk.QueueFlag.GRAPHICS in property.queueFlags {
             indices.graphics_family = i
@@ -298,9 +299,9 @@ create_logical_device :: proc(app: ^Application) {
     for fam in unique_families {
         queue_priority := []f32{1.0}
         append(&queue_info, vk.DeviceQueueCreateInfo{
-            sType = vk.StructureType.DEVICE_QUEUE_CREATE_INFO,
+            sType            = vk.StructureType.DEVICE_QUEUE_CREATE_INFO,
             queueFamilyIndex = fam,
-            queueCount = 1,
+            queueCount       = 1,
             pQueuePriorities = raw_data(queue_priority),
         })
     }
@@ -309,10 +310,12 @@ create_logical_device :: proc(app: ^Application) {
     device_features := []vk.PhysicalDeviceFeatures{}
 
     create_info := vk.DeviceCreateInfo {
-        sType = vk.StructureType.DEVICE_CREATE_INFO,
-        pQueueCreateInfos = raw_data(queue_info),
-        queueCreateInfoCount = cast(u32)len(queue_info),
-        pEnabledFeatures = raw_data(device_features),
+        sType                   = vk.StructureType.DEVICE_CREATE_INFO,
+        pQueueCreateInfos       = raw_data(queue_info),
+        queueCreateInfoCount    = cast(u32)len(queue_info),
+        pEnabledFeatures        = raw_data(device_features),
+        ppEnabledExtensionNames = raw_data(REQUIRED_DEVICE_EXTENSIONS),
+        enabledExtensionCount   = cast(u32)len(REQUIRED_DEVICE_EXTENSIONS),
     }
 
     result := vk.CreateDevice(app.vk_physical_device, &create_info, nil, &app.vk_logical_device)
@@ -331,4 +334,42 @@ create_surface :: proc(app: ^Application) -> (surface: vk.SurfaceKHR) {
         log.error("Failed to create window surface")
     }
     return
+}
+
+check_device_extension_support :: proc(device: vk.PhysicalDevice) -> bool {
+    count: u32
+    vk.EnumerateDeviceExtensionProperties(device, nil, &count, nil)
+
+    properties := make([]vk.ExtensionProperties, count)
+    defer delete(properties)
+    vk.EnumerateDeviceExtensionProperties(device, nil, &count, raw_data(properties))
+
+    req: for required_device_extension in REQUIRED_DEVICE_EXTENSIONS {
+        found := false
+        for &property in properties {
+            if required_device_extension == cstring(raw_data(&property.extensionName)) {
+                found = true
+            }
+        }
+        if !found {
+            log.errorf("Required validation layer '%s' not found!", required_device_extension)
+            return false
+        }else {
+            log.debug("Found required validation layer: ", required_device_extension)
+            break req
+        }
+    }
+
+    return false
+}
+
+Swap_Chain_Support_Details :: struct {
+    capabilities:  vk.SurfaceCapabilitiesKHR,
+    formats:       []vk.SurfaceFormatKHR,
+    present_modes: []vk.PresentModeKHR,
+}
+
+delete_swap_chain_support_details :: proc(using details: ^Swap_Chain_Support_Details) {
+    delete(formats)
+    delete(present_modes)
 }
